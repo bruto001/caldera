@@ -1,6 +1,7 @@
 import asyncio
 import os.path
 
+import jinja2
 import pytest
 import random
 import string
@@ -14,8 +15,8 @@ from base64 import b64encode
 from unittest import mock
 from aiohttp_apispec import validation_middleware
 from aiohttp import web
+import aiohttp_jinja2
 from pathlib import Path
-
 from app.api.v2.handlers.agent_api import AgentApi
 from app.api.v2.handlers.ability_api import AbilityApi
 from app.api.v2.handlers.objective_api import ObjectiveApi
@@ -25,9 +26,11 @@ from app.api.v2.handlers.contact_api import ContactApi
 from app.api.v2.handlers.obfuscator_api import ObfuscatorApi
 from app.api.v2.handlers.plugins_api import PluginApi
 from app.api.v2.handlers.fact_source_api import FactSourceApi
+from app.api.v2.handlers.fact_api import FactApi
 from app.api.v2.handlers.planner_api import PlannerApi
 from app.api.v2.handlers.health_api import HealthApi
 from app.api.v2.handlers.schedule_api import ScheduleApi
+from app.api.v2.handlers.payload_api import PayloadApi
 from app.objects.c_obfuscator import Obfuscator
 from app.objects.c_objective import Objective
 from app.objects.c_planner import PlannerSchema
@@ -61,6 +64,7 @@ from app.api.v2.responses import apispec_request_validation_middleware
 from app.api.rest_api import RestApi
 
 from app import version
+from tests import AsyncMock
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(DIR, '..', 'conf')
@@ -178,7 +182,7 @@ def ability():
     def _generate_ability(ability_id=None, *args, **kwargs):
         if not ability_id:
             ability_id = random.randint(0, 999999)
-        return Ability(ability_id=ability_id, *args, **kwargs)
+        return Ability(*args, ability_id=ability_id, **kwargs)
 
     return _generate_ability
 
@@ -186,7 +190,7 @@ def ability():
 @pytest.fixture
 def operation():
     def _generate_operation(name, agents, adversary, *args, **kwargs):
-        return Operation(name=name, agents=agents, adversary=adversary, *args, **kwargs)
+        return Operation(*args, name=name, agents=agents, adversary=adversary, **kwargs)
 
     return _generate_operation
 
@@ -210,7 +214,7 @@ def obfuscator(event_loop, data_svc):
 @pytest.fixture
 def agent():
     def _generate_agent(sleep_min, sleep_max, watchdog, *args, **kwargs):
-        return Agent(sleep_min=sleep_min, sleep_max=sleep_max, watchdog=watchdog, *args, **kwargs)
+        return Agent(*args, sleep_min=sleep_min, sleep_max=sleep_max, watchdog=watchdog, **kwargs)
 
     return _generate_agent
 
@@ -218,7 +222,7 @@ def agent():
 @pytest.fixture
 def link():
     def _generate_link(command, paw, ability, executor, *args, **kwargs):
-        return Link.load(dict(ability=ability, executor=executor, command=command, paw=paw, *args, **kwargs))
+        return Link.load(dict(*args, ability=ability, executor=executor, command=command, paw=paw, **kwargs))
 
     return _generate_link
 
@@ -226,7 +230,7 @@ def link():
 @pytest.fixture
 def fact():
     def _generate_fact(trait, *args, **kwargs):
-        return Fact(trait=trait, *args, **kwargs)
+        return Fact(*args, trait=trait, **kwargs)
 
     return _generate_fact
 
@@ -234,7 +238,7 @@ def fact():
 @pytest.fixture
 def rule():
     def _generate_rule(action, trait, *args, **kwargs):
-        return Rule(action=action, trait=trait, *args, **kwargs)
+        return Rule(*args, action=action, trait=trait, **kwargs)
 
     return _generate_rule
 
@@ -242,7 +246,7 @@ def rule():
 @pytest.fixture
 def relationship():
     def _generate_relationship(source, edge, target, *args, **kwargs):
-        return Relationship(source=source, edge=edge, target=target, *args, **kwargs)
+        return Relationship(*args, source=source, edge=edge, target=target, **kwargs)
 
     return _generate_relationship
 
@@ -349,10 +353,12 @@ async def api_v2_client(event_loop, aiohttp_client, contact_svc):
         ObjectiveApi(svcs).add_routes(app)
         ObfuscatorApi(svcs).add_routes(app)
         PluginApi(svcs).add_routes(app)
+        FactApi(svcs).add_routes(app)
         FactSourceApi(svcs).add_routes(app)
         PlannerApi(svcs).add_routes(app)
         HealthApi(svcs).add_routes(app)
         ScheduleApi(svcs).add_routes(app)
+        PayloadApi(svcs).add_routes(app)
         return app
 
     async def initialize():
@@ -365,6 +371,7 @@ async def api_v2_client(event_loop, aiohttp_client, contact_svc):
         _ = DataService()
         _ = RestService()
         _ = PlanningService()
+        _ = KnowledgeService()
         _ = LearningService()
         auth_svc = AuthService()
         _ = FileSvc()
@@ -380,7 +387,7 @@ async def api_v2_client(event_loop, aiohttp_client, contact_svc):
         app_svc.register_subapp('/api/v2', make_app(svcs=services))
         aiohttp_apispec.setup_aiohttp_apispec(
             app=app_svc.application,
-            title='CALDERA',
+            title='Caldera',
             version=version.get_version(),
             swagger_path='/api/docs',
             url='/api/docs/swagger.json',
@@ -388,7 +395,10 @@ async def api_v2_client(event_loop, aiohttp_client, contact_svc):
         )
         app_svc.application.middlewares.append(apispec_request_validation_middleware)
         app_svc.application.middlewares.append(validation_middleware)
-
+        templates = ['plugins/%s/templates' % p.lower() for p in app_svc.get_config('plugins')]
+        templates.append('plugins/magma/dist')
+        templates.append("templates")
+        aiohttp_jinja2.setup(app_svc.application, loader=jinja2.FileSystemLoader(templates))
         return app_svc
 
     app_svc = await initialize()
@@ -500,7 +510,7 @@ def test_agent(event_loop):
 
 @pytest.fixture
 def test_executor(test_agent):
-    return ExecutorSchema().load(dict(timeout=60, platform=test_agent.platform, name='linux', command='ls'))
+    return ExecutorSchema().load(dict(timeout=60, platform=test_agent.platform, name='sh', command='ls'))
 
 
 @pytest.fixture
@@ -597,3 +607,13 @@ def setup_empty_operation(event_loop, test_operation):
     test_objective = Objective(id='123', name='test objective', description='test', goals=[])
     test_operation.objective = test_objective
     event_loop.run_until_complete(BaseService.get_service('data_svc').store(test_operation))
+
+
+@pytest.fixture()
+def fire_event_mock(event_svc):
+    """A mock for event_svc.fire_event()
+
+    fire_event()  wont work in tests as underlying Application
+    is a stub so mock call here
+    """
+    event_svc.fire_event = AsyncMock(return_value=None)

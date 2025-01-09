@@ -7,7 +7,8 @@ from app.api.v2.handlers.base_object_api import BaseObjectApi
 from app.api.v2.managers.operation_api_manager import OperationApiManager
 from app.api.v2.responses import JsonHttpNotFound
 from app.api.v2.schemas.base_schemas import BaseGetAllQuerySchema, BaseGetOneQuerySchema
-from app.objects.c_operation import Operation, OperationSchema, OperationOutputRequestSchema
+from app.api.v2.schemas.link_result_schema import LinkResultSchema
+from app.objects.c_operation import Operation, OperationSchema, OperationSchemaAlt, OperationOutputRequestSchema
 from app.objects.secondclass.c_link import LinkSchema
 
 
@@ -20,6 +21,7 @@ class OperationApi(BaseObjectApi):
     def add_routes(self, app: web.Application):
         router = app.router
         router.add_get('/operations', self.get_operations)
+        router.add_get('/operations/summary', self.get_operations_summary)
         router.add_get('/operations/{id}', self.get_operation_by_id)
         router.add_post('/operations', self.create_operation)
         router.add_patch('/operations/{id}', self.update_operation)
@@ -36,7 +38,7 @@ class OperationApi(BaseObjectApi):
 
     @aiohttp_apispec.docs(tags=['operations'],
                           summary='Retrieve operations',
-                          description='Retrieve all CALDERA operations from memory.  Use fields from the '
+                          description='Retrieve all Caldera operations from memory.  Use fields from the '
                                       '`BaseGetAllQuerySchema` in the request body to filter.')
     @aiohttp_apispec.querystring_schema(BaseGetAllQuerySchema)
     @aiohttp_apispec.response_schema(OperationSchema(many=True, partial=True),
@@ -47,7 +49,7 @@ class OperationApi(BaseObjectApi):
 
     @aiohttp_apispec.docs(tags=['operations'],
                           summary='Retrieve an operation by operation id',
-                          description='Retrieve one CALDERA operation from memory based on the operation id (String '
+                          description='Retrieve one Caldera operation from memory based on the operation id (String '
                                       'UUID).  Use fields from the `BaseGetOneQuerySchema` in the request body to add '
                                       '`include` and `exclude` filters.',
                           parameters=[{
@@ -65,10 +67,30 @@ class OperationApi(BaseObjectApi):
         return web.json_response(operation)
 
     @aiohttp_apispec.docs(tags=['operations'],
-                          summary='Create a new CALDERA operation record',
-                          description='Create a new CALDERA operation using the format provided in the '
+                          summary='Retrieve operations (alternate)',
+                          description='Retrieve all Caldera operations from memory, with an alternate selection'
+                                      ' of properties. Use fields from the `BaseGetAllQuerySchema` in the request'
+                                      ' body to filter.')
+    @aiohttp_apispec.querystring_schema(BaseGetAllQuerySchema)
+    @aiohttp_apispec.response_schema(OperationSchemaAlt(many=True, partial=True),
+                                     description='The response is a list of all operations.')
+    async def get_operations_summary(self, request: web.Request):
+        remove_props = ['chain', 'host_group', 'source', 'visibility']
+        operations = await self.get_all_objects(request)
+        operations_mod = []
+        for op in operations:
+            op['agents'] = self._api_manager.get_agents(op)
+            op['hosts'] = await self._api_manager.get_hosts(op)
+            for prop in remove_props:
+                op.pop(prop, None)
+            operations_mod.append(op)
+        return web.json_response(operations_mod)
+
+    @aiohttp_apispec.docs(tags=['operations'],
+                          summary='Create a new Caldera operation record',
+                          description='Create a new Caldera operation using the format provided in the '
                                       '`OperationSchema`. Required schema fields are as follows: "name", '
-                                      '"adversary.adversary_id", "planner.planner_id", and "source.id"')
+                                      '"adversary.adversary_id", "planner.id", and "source.id"')
     @aiohttp_apispec.request_schema(OperationSchema)
     @aiohttp_apispec.response_schema(OperationSchema,
                                      description='The response is the newly-created operation report.')
@@ -78,7 +100,7 @@ class OperationApi(BaseObjectApi):
 
     @aiohttp_apispec.docs(tags=['operations'],
                           summary='Update fields within an operation',
-                          description='Update one CALDERA operation in memory based on the operation id (String '
+                          description='Update one Caldera operation in memory based on the operation id (String '
                                       'UUID). The `state`, `autonomous` and `obfuscator` fields in the operation '
                                       'object may be edited in the request body using the `OperationSchema`.',
                           parameters=[{
@@ -97,7 +119,7 @@ class OperationApi(BaseObjectApi):
 
     @aiohttp_apispec.docs(tags=['operations'],
                           summary='Delete an operation by operation id',
-                          description='Delete one CALDERA operation from memory based on the operation id (String '
+                          description='Delete one Caldera operation from memory based on the operation id (String '
                                       'UUID).',
                           parameters=[{
                               'in': 'path',
@@ -110,6 +132,9 @@ class OperationApi(BaseObjectApi):
                                      description='There is an empty response from a successful delete request.')
     async def delete_operation(self, request: web.Request):
         await self.delete_object(request)
+        knowledge_svc_handle = self._api_manager.knowledge_svc
+        await knowledge_svc_handle.delete_fact(criteria=dict(source=request.match_info.get('id')))
+        await knowledge_svc_handle.delete_relationship(criteria=dict(origin=request.match_info.get('id')))
         return web.HTTPNoContent()
 
     @aiohttp_apispec.docs(tags=['operations'],
@@ -208,7 +233,7 @@ class OperationApi(BaseObjectApi):
 
     @aiohttp_apispec.docs(tags=['operations'],
                           summary='Retrieve the result of a link',
-                          description='Retrieve the results of one link from memory based on the operation id (String '
+                          description='Retrieve a dictionary containing a link and its results dictionary based on the operation id (String '
                                       'UUID) and link id (String UUID).  Use fields from the `BaseGetOneQuerySchema` in the '
                                       'request body to add `include` and `exclude` filters.',
                           parameters=[{
@@ -226,8 +251,8 @@ class OperationApi(BaseObjectApi):
                               'description': 'UUID of the link object to retrieve results of.'
                           }])
     @aiohttp_apispec.querystring_schema(BaseGetOneQuerySchema)
-    @aiohttp_apispec.response_schema(LinkSchema(partial=True),
-                                     description='Contains a result string for the link requested.')
+    @aiohttp_apispec.response_schema(LinkResultSchema(),
+                                     description='Contains a dictionary with the requested link and its results dictionary.')
     async def get_operation_link_result(self, request: web.Request):
         operation_id = request.match_info.get('id')
         link_id = request.match_info.get('link_id')

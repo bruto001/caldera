@@ -1,12 +1,15 @@
 import asyncio
 import base64
+import binascii
 import copy
+import json
 import os
 import subprocess
+import sys
 
 from aiohttp import web
 from multidict import CIMultiDict
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -118,7 +121,17 @@ class FileSvc(FileServiceInterface, BaseService):
 
     def read_result_file(self, link_id, location='data/results'):
         buf = self._read(os.path.join(location, link_id))
-        return buf.decode('utf-8')
+        decoded_buf = buf.decode('utf-8')
+        try:
+            json.loads(self.decode_bytes(decoded_buf))
+            return decoded_buf
+        except json.JSONDecodeError:
+            results = json.dumps(dict(
+                stdout=self.decode_bytes(decoded_buf, strip_newlines=False), stderr='', exit_code=''))
+            return self.encode_string(str(results))
+        except binascii.Error:
+            results = json.dumps(dict(stdout=decoded_buf, stderr='', exit_code=''))
+            return self.encode_string(str(results))
 
     def write_result_file(self, link_id, output, location='data/results'):
         output = bytes(output, encoding='utf-8')
@@ -227,7 +240,17 @@ class FileSvc(FileServiceInterface, BaseService):
         with open(filename, 'rb') as f:
             buf = f.read()
         if self.encryptor and buf.startswith(bytes(FILE_ENCRYPTION_FLAG, encoding='utf-8')):
-            buf = self.encryptor.decrypt(buf[len(FILE_ENCRYPTION_FLAG):])
+            try:
+                buf = self.encryptor.decrypt(buf[len(FILE_ENCRYPTION_FLAG):])
+            except InvalidToken:
+                self.log.error('Failed to decrypt saved Caldera state due to incorrect encryption key.\n'
+                               ' - If attempting to restore secure backup, verify that conf/local.yml exists with '
+                               'correct encryption_key value, and that the server is being run without --insecure.\n'
+                               ' - If attempting to restore insecure backup, verify that conf/default.yml exists '
+                               'with correct encryption_key value, and that the server is being run with --insecure.\n'
+                               ' - If correct encryption_key value cannot be recovered, rerun the server with --fresh '
+                               'to disregard stored server state.')
+                sys.exit(1)
         return buf
 
     def _get_encryptor(self):

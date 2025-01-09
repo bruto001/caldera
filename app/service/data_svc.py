@@ -41,6 +41,8 @@ PAYLOADS_CONFIG_STANDARD_KEY = 'standard_payloads'
 PAYLOADS_CONFIG_SPECIAL_KEY = 'special_payloads'
 PAYLOADS_CONFIG_EXTENSIONS_KEY = 'extensions'
 
+DEPRECATION_WARNING_LOAD = "Function deprecated and will be removed in a future update. Use load_yaml_file"
+
 
 class DataService(DataServiceInterface, BaseService):
 
@@ -169,7 +171,7 @@ class DataService(DataServiceInterface, BaseService):
                 ab.pop('plugin', plugin)
 
                 if tactic and tactic not in filename:
-                    self.log.error('Ability=%s has wrong tactic' % id)
+                    self.log.error('Ability=%s has wrong tactic' % ability_id)
 
                 await self._create_ability(ability_id=ability_id, name=name, description=description, tactic=tactic,
                                            technique_id=technique_id, technique_name=technique_name,
@@ -240,15 +242,15 @@ class DataService(DataServiceInterface, BaseService):
         return [RequirementSchema().load(entry) for entry in requirements]
 
     async def load_adversary_file(self, filename, access):
-        warnings.warn("Function deprecated and will be removed in a future update. Use load_yaml_file", DeprecationWarning)
+        warnings.warn(DEPRECATION_WARNING_LOAD, DeprecationWarning, stacklevel=2)
         await self.load_yaml_file(Adversary, filename, access)
 
     async def load_source_file(self, filename, access):
-        warnings.warn("Function deprecated and will be removed in a future update. Use load_yaml_file", DeprecationWarning)
+        warnings.warn(DEPRECATION_WARNING_LOAD, DeprecationWarning, stacklevel=2)
         await self.load_yaml_file(Source, filename, access)
 
     async def load_objective_file(self, filename, access):
-        warnings.warn("Function deprecated and will be removed in a future update. Use load_yaml_file", DeprecationWarning)
+        warnings.warn(DEPRECATION_WARNING_LOAD, DeprecationWarning, stacklevel=2)
         await self.load_yaml_file(Objective, filename, access)
 
     async def load_yaml_file(self, object_class, filename, access):
@@ -257,6 +259,25 @@ class DataService(DataServiceInterface, BaseService):
             obj.access = access
             obj.plugin = self._get_plugin_name(filename)
             await self.store(obj)
+
+    async def create_or_update_everything_adversary(self):
+        everything = {
+            'id': '785baa02-df5d-450a-ab3a-1a863f22b4b0',
+            'name': 'Everything Bagel',
+            'description': 'An adversary with all adversary abilities',
+            'atomic_ordering': [
+                ability.ability_id
+                for ability in await self.locate('abilities')
+                if (
+                    ability.access == self.Access.RED
+                    or ability.access == self.Access.APP
+                )
+                and ability.plugin != 'training'
+            ],
+        }
+        obj = Adversary.load(everything)
+        obj.access = self.Access.RED
+        await self.store(obj)
 
     async def _load(self, plugins=()):
         try:
@@ -277,6 +298,7 @@ class DataService(DataServiceInterface, BaseService):
                 await task
             await self._load_extensions()
             await self._load_data_encoders(plugins)
+            await self.create_or_update_everything_adversary()
             await self._verify_data_sets()
         except Exception as e:
             self.log.debug(repr(e), exc_info=True)
@@ -459,3 +481,12 @@ class DataService(DataServiceInterface, BaseService):
     def _get_plugin_name(self, filename):
         plugin_path = pathlib.PurePath(filename).parts
         return plugin_path[1] if 'plugins' in plugin_path else ''
+
+    async def get_facts_from_source(self, fact_source_id):
+        fact_sources = await self.locate('sources', match=dict(id=fact_source_id))
+        if len(fact_sources) == 0:
+            return []
+        elif len(fact_sources) > 1:
+            self.log.error('Found multiple fact sources with the same id', fact_source_id)
+            return []
+        return fact_sources[0].facts

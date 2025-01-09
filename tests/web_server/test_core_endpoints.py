@@ -10,11 +10,7 @@ from app.api.rest_api import RestApi
 from app.objects.c_agent import Agent
 from app.service.app_svc import AppService
 from app.service.auth_svc import AuthService
-from app.service.contact_svc import ContactService
 from app.service.data_svc import DataService
-from app.service.file_svc import FileSvc
-from app.service.learning_svc import LearningService
-from app.service.planning_svc import PlanningService
 from app.service.rest_svc import RestService
 from app.service.interfaces.i_login_handler import LoginHandlerInterface
 from app.utility.base_service import BaseService
@@ -33,15 +29,10 @@ async def aiohttp_client(aiohttp_client):
         app_svc = AppService(web.Application())
         _ = DataService()
         _ = RestService()
-        _ = PlanningService()
-        _ = LearningService()
         auth_svc = AuthService()
-        _ = ContactService()
-        _ = FileSvc()
         services = app_svc.get_services()
         os.chdir(str(Path(__file__).parents[2]))
 
-        await app_svc.register_contacts()
         await app_svc.load_plugins(['sandcat', 'ssl'])
         _ = await RestApi(services).enable()
         await auth_svc.apply(app_svc.application, auth_svc.get_config('users'))
@@ -75,11 +66,6 @@ async def test_home(aiohttp_client):
     resp = await aiohttp_client.get('/')
     assert resp.status == HTTPStatus.OK
     assert resp.content_type == 'text/html'
-
-
-async def test_access_denied(aiohttp_client):
-    resp = await aiohttp_client.get('/enter')
-    assert resp.status == HTTPStatus.UNAUTHORIZED
 
 
 async def test_login(aiohttp_client):
@@ -131,7 +117,7 @@ async def test_command_overwrite_failure(aiohttp_client, authorized_cookies):
                                                           python=dict(attr='version',
                                                                       module='sys',
                                                                       type='python_module',
-                                                                      version='3.7.0'))))
+                                                                      version='3.11.0'))))
 
     assert resp.status == HTTPStatus.OK
     config_dict = await resp.json()
@@ -161,7 +147,7 @@ async def test_custom_rejecting_login_handler(aiohttp_client):
     assert resp.status == HTTPStatus.UNAUTHORIZED
     assert await resp.text() == 'Automatic rejection'
 
-    resp = await aiohttp_client.get('/', allow_redirects=False)
+    resp = await aiohttp_client.get('/api/v2', allow_redirects=False)
     assert resp.status == HTTPStatus.UNAUTHORIZED
     assert await resp.text() == 'Automatic rejection'
 

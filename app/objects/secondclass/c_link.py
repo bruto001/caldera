@@ -25,29 +25,30 @@ class LinkSchema(ma.Schema):
     class Meta:
         unknown = ma.EXCLUDE
 
-    id = ma.fields.String(missing='')
+    id = ma.fields.String(load_default='')
     paw = ma.fields.String()
     command = ma.fields.String()
-    status = ma.fields.Integer(missing=-3)
-    score = ma.fields.Integer(missing=0)
-    jitter = ma.fields.Integer(missing=0)
+    plaintext_command = ma.fields.String()
+    status = ma.fields.Integer(load_default=-3)
+    score = ma.fields.Integer(load_default=0)
+    jitter = ma.fields.Integer(load_default=0)
     decide = ma.fields.DateTime(format=BaseObject.TIME_FORMAT)
-    pin = ma.fields.Integer(missing=0)
+    pin = ma.fields.Integer(load_default=0)
     pid = ma.fields.String()
     facts = ma.fields.List(ma.fields.Nested(FactSchema()))
     relationships = ma.fields.List(ma.fields.Nested(RelationshipSchema()))
     used = ma.fields.List(ma.fields.Nested(FactSchema()))
     unique = ma.fields.String()
-    collect = ma.fields.DateTime(format=BaseObject.TIME_FORMAT, default='')
+    collect = ma.fields.DateTime(format=BaseObject.TIME_FORMAT, dump_default='')
     finish = ma.fields.String()
     ability = ma.fields.Nested(AbilitySchema())
     executor = ma.fields.Nested(ExecutorSchema())
-    cleanup = ma.fields.Integer(missing=0)
+    cleanup = ma.fields.Integer(load_default=0)
     visibility = ma.fields.Nested(VisibilitySchema())
-    host = ma.fields.String(missing=None)
+    host = ma.fields.String(load_default=None)
     output = ma.fields.String()
     deadman = ma.fields.Boolean()
-    agent_reported_time = ma.fields.DateTime(format=BaseObject.TIME_FORMAT, missing=None)
+    agent_reported_time = ma.fields.DateTime(format=BaseObject.TIME_FORMAT, load_default=None)
 
     @ma.pre_load()
     def fix_ability(self, link, **_):
@@ -130,6 +131,13 @@ class Link(BaseObject):
     def status(self):
         return self._status
 
+    @property
+    def display(self):
+        dump = LinkSchema(exclude=['jitter']).dump(self)
+        dump['command'] = self.decode_bytes(dump['command'])
+        dump['plaintext_command'] = self.decode_bytes(dump['plaintext_command'])
+        return dump
+
     @status.setter
     def status(self, value):
         previous_status = getattr(self, '_status', NO_STATUS_SET)
@@ -151,11 +159,12 @@ class Link(BaseObject):
     def is_global_variable(cls, variable):
         return variable in cls.RESERVED
 
-    def __init__(self, command='', paw='', ability=None, executor=None, status=-3, score=0, jitter=0, cleanup=0, id='',
+    def __init__(self, command='', plaintext_command='', paw='', ability=None, executor=None, status=-3, score=0, jitter=0, cleanup=0, id='',
                  pin=0, host=None, deadman=False, used=None, relationships=None, agent_reported_time=None):
         super().__init__()
         self.id = str(id)
         self.command = command
+        self.plaintext_command = plaintext_command
         self.command_hash = None
         self.paw = paw
         self.host = host

@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ubuntu:24.04
 SHELL ["/bin/bash", "-c"]
 
 ARG TZ="UTC"
@@ -12,26 +12,37 @@ ADD . .
 RUN if [ -z "$(ls plugins/stockpile)" ]; then echo "stockpile plugin not downloaded - please ensure you recursively cloned the caldera git repository and try again."; exit 1; fi
 
 RUN apt-get update && \
-    apt-get -y install python3 python3-pip git curl
+    apt-get -y install python3 python3-pip python3-venv git curl golang-go
+
 
 #WIN_BUILD is used to enable windows build in sandcat plugin
 ARG WIN_BUILD=false
 RUN if [ "$WIN_BUILD" = "true" ] ; then apt-get -y install mingw-w64; fi
 
+# Set up python virtualenv
+ENV VIRTUAL_ENV=/opt/venv/caldera
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
 # Install pip requirements
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Set up config file and disable atomic by default
-RUN grep -v "\- atomic" conf/default.yml > conf/local.yml
-
-# Install golang
-RUN curl -L https://go.dev/dl/go1.17.6.linux-amd64.tar.gz -o go1.17.6.linux-amd64.tar.gz
-RUN rm -rf /usr/local/go && tar -C /usr/local -xzf go1.17.6.linux-amd64.tar.gz;
-ENV PATH="${PATH}:/usr/local/go/bin"
-RUN go version;
+RUN python3 -c "import app; import app.utility.config_generator; app.utility.config_generator.ensure_local_config();"; \
+    sed -i '/\- atomic/d' conf/local.yml;
 
 # Compile default sandcat agent binaries, which will download basic golang dependencies.
+
+# Install Go dependencies
+WORKDIR /usr/src/app/plugins/sandcat/gocat
+RUN go mod tidy && go mod download
+
 WORKDIR /usr/src/app/plugins/sandcat
+
+# Fix line ending error that can be caused by cloning the project in a Windows environment
+RUN if [ "$WIN_BUILD" = "true" ] ; then cp ./update-agents.sh ./update-agents-copy.sh; fi
+RUN if [ "$WIN_BUILD" = "true" ] ; then tr -d '\15\32' < ./update-agents-copy.sh > ./update-agents.sh; fi
+RUN if [ "$WIN_BUILD" = "true" ] ; then rm ./update-agents-copy.sh; fi
 
 RUN ./update-agents.sh
 
@@ -55,7 +66,32 @@ RUN if [ ! -d "/usr/src/app/plugins/atomic/data/atomic-red-team" ]; then   \
         /usr/src/app/plugins/atomic/data/atomic-red-team;                  \
 fi
 
+WORKDIR /usr/src/app/plugins/emu
+
+# If emu is enabled, complete necessary installation steps
+RUN if [ $(grep -c "\- emu" ../../conf/local.yml)  ]; then \
+    apt-get -y install zlib1g unzip;                \
+    pip3 install -r requirements.txt;               \
+    ./download_payloads.sh;                         \
+fi
+
 WORKDIR /usr/src/app
+
+# Install Node.js, npm, and other build VueJS front-end
+RUN apt-get update && \
+    apt-get install -y nodejs npm && \
+    # Directly use npm to install dependencies and build the application
+    (cd plugins/magma && npm install) && \
+    (cd plugins/magma && npm run build) && \
+    # Remove Node.js, npm, and other unnecessary packages
+    apt-get remove -y nodejs npm && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /usr/src/app
+
+STOPSIGNAL SIGINT
 
 # Default HTTP port for web interface and agent beacons over HTTP
 EXPOSE 8888
